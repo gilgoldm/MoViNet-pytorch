@@ -45,5 +45,6 @@ for frame in frames:
     predictions.append(output)
 # The video classification will simply be the last output of the model.
 output_tf = predictions[-1]
+print(output_tf)
 
 
