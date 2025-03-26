@@ -1,0 +1,5 @@
+numpy==2.2.4
+Pillow==11.1.0
+six==1.17.0
+tensorflow==2.19.0
+tensorflow_hub==0.16.1
