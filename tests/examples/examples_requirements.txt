@@ -1,5 +1,6 @@
 numpy
 Pillow==11.1.0
 six==1.17.0
-tensorflow[and-cuda]==2.19.0
+tensorflow[and-cuda]==2.18.1
 tensorflow_hub==0.16.1
+tf_models_official==2.18.00
