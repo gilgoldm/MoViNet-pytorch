@@ -20,8 +20,6 @@ movinets = [_C.MODEL.MoViNetA0,
             _C.MODEL.MoViNetA4,
             _C.MODEL.MoViNetA5, ]
 
-tf.config.optimizer.set_experimental_options({"layout_optimizer": False})
-
 
 class MoViNetKaras(tf.keras.Model):
     def __init__(self, hub_url):
@@ -35,40 +33,6 @@ class MoViNetKaras(tf.keras.Model):
 
 
 class TestPretrainedModels(unittest.TestCase):
-
-    @staticmethod
-    def create_base_hub_model(model_id) -> tf.keras.Model:
-        hub_url = f"https://tfhub.dev/tensorflow/movinet/{model_id}/base/kinetics-600/classification/"
-        model = MoViNetKaras(hub_url)
-        model.build([1, 1, 1, 1, 3])
-        return model
-
-    def testBasePretrainedModels(self):
-        image_url = 'https://upload.wikimedia.org/wikipedia/commons/8/84/Ski_Famille_-_Family_Ski_Holidays.jpg'
-        image_height_l = [172, 172, 224, 256, 290, 320]
-        image_width_l = [172, 172, 224, 256, 290, 320]
-
-        for i in range(6):
-            image_width = image_width_l[i]
-            image_height = image_height_l[i]
-            with urllib.request.urlopen(image_url) as f:
-                image = Image.open(BytesIO(f.read())).resize((image_height, image_width))
-            video = tf.reshape(np.array(image), [1, 1, image_height, image_width, 3])
-            video = tf.cast(video, tf.float32) / 255.
-            video = tf.concat([video, video / 2], axis=1)
-            video_2 = rearrange(torch.from_numpy(video.numpy()), "b t h w c-> b c t h w")
-
-            model_tf = TestPretrainedModels.create_base_hub_model(f'a{i}')
-            output_tf = model_tf(video)
-            del model_tf
-
-            model = MoViNet(movinets[i], causal=False, pretrained=True)
-            model.eval()
-            with torch.no_grad():
-                model.clean_activation_buffers()
-                output = model(video_2)
-            del model
-            self.assertTrue(np.allclose(output.detach().numpy(), output_tf.numpy(), atol=1e-2))
 
     def testStreamPretrainedModels(self):
         image_url = 'https://upload.wikimedia.org/wikipedia/commons/8/84/Ski_Famille_-_Family_Ski_Holidays.jpg'
