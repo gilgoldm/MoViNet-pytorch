@@ -10,24 +10,24 @@ from official.projects.movinet.modeling import movinet_model
 import numpy as np
 import re
 
-model_id = 'a0'
-num_classes = 600
-H = W = 172
-C = 3
-T = 1
-bs = 1
 
-
-def create_hub_model(model_id) -> Tuple[tf.keras.Model, Dict]:
+def create_stream_hub_model(model_id, H, W) -> Tuple[tf.keras.Model, Dict]:
+    C = 3
+    T = 1
+    bs = 1
     hub_url = f"https://tfhub.dev/tensorflow/movinet/{model_id}/stream/kinetics-600/classification/"
     model_hub = hub.KerasLayer(hub_url)
     init_states_fn = model_hub.resolved_object.signatures['init_states']
-    dummy_input = tf.random.normal(shape=[bs, T, H, W, 3])
+    dummy_input = tf.random.normal(shape=[bs, T, H, W, C])
     init_states = init_states_fn(tf.shape(dummy_input))
     return model_hub, init_states
 
 
-def create_local(model_id) -> Tuple[movinet.Movinet, Dict]:
+def create_stream_source_model(model_id, H, W) -> Tuple[movinet.Movinet, Dict]:
+    num_classes = 600
+    C = 3
+    T = 1
+    bs = 1
     backbone = movinet.Movinet(
         model_id=model_id,
         causal=True,
@@ -41,7 +41,7 @@ def create_local(model_id) -> Tuple[movinet.Movinet, Dict]:
     backbone.trainable = False
     model = movinet_model.MovinetClassifier(
         backbone,
-        num_classes=600,
+        num_classes=num_classes,
         output_states=True
     )
     checkpoint_dir = f'movinet_{model_id}_stream'
@@ -49,12 +49,12 @@ def create_local(model_id) -> Tuple[movinet.Movinet, Dict]:
     checkpoint = tf.train.Checkpoint(model=model)
     status = checkpoint.restore(checkpoint_path).expect_partial()
     status.assert_existing_objects_matched()
-    dummy_input = tf.random.normal(shape=[bs, T, H, W, 3])
+    dummy_input = tf.random.normal(shape=[bs, T, H, W, C])
     init_states_local = model.init_states(tf.shape(dummy_input))
     return model, init_states_local
 
 
-def hub_name_to_local(hub_name: str) -> str:
+def hub_name_to_source(hub_name: str) -> str:
     # hub -> local
     # b{i}/l{i} -> block{i}_layer{i}
     # expansion/bn -> expansion/conv2d/bn
@@ -77,12 +77,12 @@ def hub_name_to_local(hub_name: str) -> str:
     return res
 
 
-def hub_to_local(hub_var) -> tf.Variable:
+def hub_to_source(hub_var) -> tf.Variable:
     dtype = hub_var.dtype
     initial_value = hub_var.read_value()  # Corrected line
 
     resource_variable = tf.compat.v1.get_variable(
-        name=hub_name_to_local(hub_var.name)[:-2],
+        name=hub_name_to_source(hub_var.name)[:-2],
         initializer=initial_value,
         dtype=dtype,
         use_resource=True
@@ -93,40 +93,49 @@ def hub_to_local(hub_var) -> tf.Variable:
 
 class MyTestCase(unittest.TestCase):
 
-    def test_hub_equal_source(self):
-        tf.keras.backend.clear_session()
-        model_hub, states_hub = create_hub_model(model_id)
-        image_url = 'https://upload.wikimedia.org/wikipedia/commons/8/84/Ski_Famille_-_Family_Ski_Holidays.jpg'
-        with urllib.request.urlopen(image_url) as f:
-            image = Image.open(BytesIO(f.read())).resize((H, W))
-        X = tf.reshape(np.array(image), [1, 1, H, W, 3])
-        X = tf.cast(X, tf.float32) / 255
-        y_hub, _ = model_hub({**states_hub, 'image': X})
-        print(y_hub[0][0:5])
-        model_local, states_local = create_local(model_id)
-        y_local, _ = model_local({**states_local, 'image': X})
-        print(y_local[0][0:5])
-        tf.debugging.assert_near(y_local, y_hub, atol=1e-3)
-        del model_hub
-        del model_local
+    def test_stream_hub_equal_source(self):
+        try:
+            model_id = 'a0'
+            H = W = 172
+            tf.keras.backend.clear_session()
+            model_hub, states_hub = create_stream_hub_model(model_id, H=H, W=W)
+            image_url = 'https://upload.wikimedia.org/wikipedia/commons/8/84/Ski_Famille_-_Family_Ski_Holidays.jpg'
+            with urllib.request.urlopen(image_url) as f:
+                image = Image.open(BytesIO(f.read())).resize((H, W))
+            X = tf.reshape(np.array(image), [1, 1, H, W, 3])
+            X = tf.cast(X, tf.float32) / 255
+            y_hub, _ = model_hub({**states_hub, 'image': X})
+            print(y_hub[0][0:5])
+            model_source, states_local = create_stream_source_model(model_id, H=H, W=W)
+            y_local, _ = model_source({**states_local, 'image': X})
+            print(y_local[0][0:5])
+            tf.debugging.assert_near(y_local, y_hub, atol=1e-3)
+        finally:
+            del model_hub
+            del model_source
 
-
-    def test_hub_weights_equal_source(self):
-        tf.keras.backend.clear_session()
-        model_hub, _ = create_hub_model(model_id)
-        model_source, states_source = create_local(model_id)
-        hub_weights = model_hub.weights
-        source_weights = model_source.weights
-        self.assertEqual(len(source_weights), len(hub_weights))
-        hub_weights_to_source = []
-        for var in hub_weights:
-            hub_weights_to_source.append(hub_to_local(var))
-        source_weights = sorted(source_weights, key=lambda v: v.name)
-        hub_weights_to_source = sorted(hub_weights_to_source, key=lambda v: v.name)
-        for i in range(len(source_weights)):
-            self.assertEqual(source_weights[i].name, hub_weights_to_source[
-                i].name, f'source_weights[i].name={source_weights[i].name}, hub_weights_to_source[i].name={hub_weights_to_source[i].name}')
-            tf.debugging.assert_near(source_weights[i], hub_weights_to_source[i], atol=1e-4)
+    def test_stream_hub_weights_equal_source(self):
+        try:
+            model_id = 'a0'
+            H = W = 172
+            tf.keras.backend.clear_session()
+            model_hub, _ = create_stream_hub_model(model_id, H=H, W=W)
+            model_source, _ = create_stream_source_model(model_id, H=H, W=W)
+            hub_weights = model_hub.weights
+            source_weights = model_source.weights
+            self.assertEqual(len(source_weights), len(hub_weights))
+            hub_weights_to_source = []
+            for var in hub_weights:
+                hub_weights_to_source.append(hub_to_source(var))
+            source_weights = sorted(source_weights, key=lambda v: v.name)
+            hub_weights_to_source = sorted(hub_weights_to_source, key=lambda v: v.name)
+            for i in range(len(source_weights)):
+                self.assertEqual(source_weights[i].name, hub_weights_to_source[
+                    i].name, f'source_weights[i].name={source_weights[i].name}, hub_weights_to_source[i].name={hub_weights_to_source[i].name}')
+                tf.debugging.assert_near(source_weights[i], hub_weights_to_source[i], atol=1e-4)
+        finally:
+            del model_hub
+            del model_source
 
 
 if __name__ == '__main__':
